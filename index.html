@@ -407,17 +407,23 @@
     <span id="toast-message" class="font-medium"></span>
   </div>
 
+  <!-- リアルタイム同期ライブラリ (Gun.js) -->
+  <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
+
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
     import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'barcode-search-app';
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'barcode-search-app-shared-v1';
     const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
 
     let db = null;
     let auth = null;
     let currentUser = null;
+    let gunNode = null;
+    let syncMode = 'offline'; // 'firebase' | 'gun' | 'offline'
+
     let appItems = [];
     let currentSearchResult = null;
     let countdownTimerId = null;
@@ -438,7 +444,7 @@
       const searchInput = document.getElementById('search-input');
       if (searchInput) searchInput.focus();
 
-      // クラウド同期の初期化
+      // クラウド同期の初期化（プレビュー環境はFirestore、GitHub Pages等の外部環境はGunリレーサーバーを使用）
       if (firebaseConfig) {
         try {
           const app = initializeApp(firebaseConfig);
@@ -453,32 +459,32 @@
             currentUser = cred.user;
           }
 
-          startRealtimeSync();
+          syncMode = 'firebase';
+          startFirebaseSync();
+          return;
         } catch (err) {
-          console.error('クラウド接続エラー:', err);
-          updateSyncStatus(false);
-          showToast('クラウド同期の接続に失敗しました', 'error');
+          console.error('Firebase接続エラー、代替クラウドへ切り替えます:', err);
         }
-      } else {
-        updateSyncStatus(false);
       }
+
+      // GitHub Pages等の外部ホスティング環境用リアルタイム同期
+      initPublicRelaySync();
     });
 
     function updateSyncStatus(isOnline) {
       const statusEl = document.getElementById('sync-status');
       if (!statusEl) return;
       if (isOnline) {
-        statusEl.className = 'hidden sm:flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium text-emerald-600 bg-emerald-50 rounded-lg border border-emerald-200/60';
+        statusEl.className = 'flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-emerald-600 bg-emerald-50 rounded-lg border border-emerald-200/60';
         statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span><span>全デバイス同期中</span>';
       } else {
-        statusEl.className = 'hidden sm:flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium text-amber-600 bg-amber-50 rounded-lg border border-amber-200/60';
-        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span><span>オフライン</span>';
+        statusEl.className = 'flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-amber-600 bg-amber-50 rounded-lg border border-amber-200/60';
+        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span><span>接続中...</span>';
       }
     }
 
-    // --- リアルタイムクラウド同期 ---
-
-    function startRealtimeSync() {
+    // --- 1. Firebase リアルタイム同期 ---
+    function startFirebaseSync() {
       if (!db || !currentUser) return;
       const itemsCol = collection(db, 'artifacts', appId, 'public', 'data', 'barcodes');
 
@@ -496,21 +502,7 @@
           }
         });
 
-        // 更新日時の新しい順にソート
-        list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-        appItems = list;
-
-        updateBadgeCount();
-        renderDataList();
-        updateSyncStatus(true);
-
-        // 検索画面で現在表示中の結果があれば最新内容に反映
-        if (currentSearchResult) {
-          const updatedHit = appItems.find(i => i.number === currentSearchResult.number);
-          if (updatedHit) {
-            displaySearchHit(updatedHit);
-          }
-        }
+        applySyncedList(list);
       }, (error) => {
         console.error('データ同期エラー:', error);
         updateSyncStatus(false);
@@ -518,38 +510,129 @@
       });
     }
 
-    async function saveItemToCloud(item) {
-      if (!db || !currentUser) {
-        showToast('クラウドに接続されていないため保存できません', 'error');
-        return false;
+    // --- 2. GitHub Pages対応 公開リレークラウド同期 (Gun.js) ---
+    function initPublicRelaySync() {
+      if (typeof Gun === 'undefined') {
+        updateSyncStatus(false);
+        showToast('同期ライブラリの読み込みに失敗しました', 'error');
+        return;
       }
+
       try {
-        const itemDoc = doc(db, 'artifacts', appId, 'public', 'data', 'barcodes', item.id);
-        await setDoc(itemDoc, {
-          number: item.number,
-          text: item.text,
-          updatedAt: item.updatedAt
+        const gun = Gun({
+          peers: [
+            'https://gun-manhattan.herokuapp.com/gun',
+            'https://relay.peer.ooo/gun',
+            'https://peer.wallie.io/gun'
+          ],
+          localStorage: false
         });
-        return true;
+
+        // サイト固有の名前空間で全デバイスとデータを共有
+        const roomKey = 'barcode-search-global-sync-' + (window.location.hostname || 'default') + '-v1';
+        gunNode = gun.get(roomKey);
+        syncMode = 'gun';
+        updateSyncStatus(true);
+
+        const itemsMap = new Map();
+
+        gunNode.map().on((data, id) => {
+          if (!data || data.deleted) {
+            itemsMap.delete(id);
+          } else if (data.number && data.text) {
+            itemsMap.set(id, {
+              id: id,
+              number: normalizeNumber(data.number),
+              text: data.text,
+              updatedAt: data.updatedAt || ''
+            });
+          }
+          applySyncedList(Array.from(itemsMap.values()));
+        });
       } catch (e) {
-        console.error('保存エラー:', e);
-        showToast('クラウドへの保存に失敗しました', 'error');
+        console.error('リレー接続エラー:', e);
+        updateSyncStatus(false);
+      }
+    }
+
+    function applySyncedList(list) {
+      list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+      appItems = list;
+
+      updateBadgeCount();
+      renderDataList();
+      updateSyncStatus(true);
+
+      if (currentSearchResult) {
+        const updatedHit = appItems.find(i => i.number === currentSearchResult.number);
+        if (updatedHit) {
+          displaySearchHit(updatedHit);
+        }
+      }
+    }
+
+    async function saveItemToCloud(item) {
+      if (syncMode === 'firebase' && db && currentUser) {
+        try {
+          const itemDoc = doc(db, 'artifacts', appId, 'public', 'data', 'barcodes', item.id);
+          await setDoc(itemDoc, {
+            number: item.number,
+            text: item.text,
+            updatedAt: item.updatedAt
+          });
+          return true;
+        } catch (e) {
+          console.error('保存エラー:', e);
+          showToast('クラウドへの保存に失敗しました', 'error');
+          return false;
+        }
+      } else if (syncMode === 'gun' && gunNode) {
+        try {
+          gunNode.get(item.id).put({
+            number: item.number,
+            text: item.text,
+            updatedAt: item.updatedAt,
+            deleted: false
+          });
+          return true;
+        } catch (e) {
+          console.error('保存エラー:', e);
+          showToast('クラウドへの保存に失敗しました', 'error');
+          return false;
+        }
+      } else {
+        showToast('クラウドに接続されていないため保存できません', 'error');
         return false;
       }
     }
 
     async function deleteItemFromCloud(id) {
-      if (!db || !currentUser) {
+      if (syncMode === 'firebase' && db && currentUser) {
+        try {
+          const itemDoc = doc(db, 'artifacts', appId, 'public', 'data', 'barcodes', id);
+          await deleteDoc(itemDoc);
+          return true;
+        } catch (e) {
+          console.error('削除エラー:', e);
+          showToast('クラウドからの削除に失敗しました', 'error');
+          return false;
+        }
+      } else if (syncMode === 'gun' && gunNode) {
+        try {
+          gunNode.get(id).put({
+            number: '',
+            text: '',
+            updatedAt: new Date().toISOString(),
+            deleted: true
+          });
+          return true;
+        } catch (e) {
+          console.error('削除エラー:', e);
+          showToast('クラウドからの削除に失敗しました', 'error');
+          return false;
+        }
+      } else {
         showToast('クラウドに接続されていないため削除できません', 'error');
-        return false;
-      }
-      try {
-        const itemDoc = doc(db, 'artifacts', appId, 'public', 'data', 'barcodes', id);
-        await deleteDoc(itemDoc);
-        return true;
-      } catch (e) {
-        console.error('削除エラー:', e);
-        showToast('クラウドからの削除に失敗しました', 'error');
         return false;
       }
     }
