@@ -410,26 +410,13 @@
   <!-- リアルタイム同期ライブラリ (Gun.js) -->
   <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
 
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-    import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'barcode-search-app-shared-v1';
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-
-    let db = null;
-    let auth = null;
-    let currentUser = null;
-    let gunNode = null;
-    let syncMode = 'offline'; // 'firebase' | 'gun' | 'offline'
-
+  <script>
     let appItems = [];
     let currentSearchResult = null;
     let countdownTimerId = null;
 
     // 初期化処理
-    window.addEventListener('DOMContentLoaded', async function() {
+    window.addEventListener('DOMContentLoaded', function() {
       // Escキーでフルスクリーン結果表示を閉じる
       document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
@@ -444,31 +431,9 @@
       const searchInput = document.getElementById('search-input');
       if (searchInput) searchInput.focus();
 
-      // クラウド同期の初期化（プレビュー環境はFirestore、GitHub Pages等の外部環境はGunリレーサーバーを使用）
-      if (firebaseConfig) {
-        try {
-          const app = initializeApp(firebaseConfig);
-          db = getFirestore(app);
-          auth = getAuth(app);
-
-          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-            const cred = await signInWithCustomToken(auth, __initial_auth_token);
-            currentUser = cred.user;
-          } else {
-            const cred = await signInAnonymously(auth);
-            currentUser = cred.user;
-          }
-
-          syncMode = 'firebase';
-          startFirebaseSync();
-          return;
-        } catch (err) {
-          console.error('Firebase接続エラー、代替クラウドへ切り替えます:', err);
-        }
-      }
-
-      // GitHub Pages等の外部ホスティング環境用リアルタイム同期
-      initPublicRelaySync();
+      // ローカルストレージからデータをロード
+      loadDataFromStorage();
+      updateSyncStatus(true);
     });
 
     function updateSyncStatus(isOnline) {
@@ -476,163 +441,35 @@
       if (!statusEl) return;
       if (isOnline) {
         statusEl.className = 'flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-emerald-600 bg-emerald-50 rounded-lg border border-emerald-200/60';
-        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span><span>全デバイス同期中</span>';
-      } else {
-        statusEl.className = 'flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-amber-600 bg-amber-50 rounded-lg border border-amber-200/60';
-        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span><span>接続中...</span>';
+        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500"></span><span>データ保存有効</span>';
       }
     }
 
-    // --- 1. Firebase リアルタイム同期 ---
-    function startFirebaseSync() {
-      if (!db || !currentUser) return;
-      const itemsCol = collection(db, 'artifacts', appId, 'public', 'data', 'barcodes');
-
-      onSnapshot(itemsCol, (snapshot) => {
-        const list = [];
-        snapshot.forEach((docSnap) => {
-          const data = docSnap.data();
-          if (data.number && data.text) {
-            list.push({
-              id: docSnap.id,
-              number: normalizeNumber(data.number),
-              text: data.text,
-              updatedAt: data.updatedAt || ''
-            });
-          }
-        });
-
-        applySyncedList(list);
-      }, (error) => {
-        console.error('データ同期エラー:', error);
-        updateSyncStatus(false);
-        showToast('データの同期中にエラーが発生しました', 'error');
-      });
-    }
-
-    // --- 2. GitHub Pages対応 公開リレークラウド同期 (Gun.js) ---
-    function initPublicRelaySync() {
-      if (typeof Gun === 'undefined') {
-        updateSyncStatus(false);
-        showToast('同期ライブラリの読み込みに失敗しました', 'error');
-        return;
-      }
-
+    function loadDataFromStorage() {
       try {
-        const gun = Gun({
-          peers: [
-            'https://gun-manhattan.herokuapp.com/gun',
-            'https://relay.peer.ooo/gun',
-            'https://peer.wallie.io/gun'
-          ],
-          localStorage: false
-        });
-
-        // サイト固有の名前空間で全デバイスとデータを共有
-        const roomKey = 'barcode-search-global-sync-' + (window.location.hostname || 'default') + '-v1';
-        gunNode = gun.get(roomKey);
-        syncMode = 'gun';
-        updateSyncStatus(true);
-
-        const itemsMap = new Map();
-
-        gunNode.map().on((data, id) => {
-          if (!data || data.deleted) {
-            itemsMap.delete(id);
-          } else if (data.number && data.text) {
-            itemsMap.set(id, {
-              id: id,
-              number: normalizeNumber(data.number),
-              text: data.text,
-              updatedAt: data.updatedAt || ''
-            });
-          }
-          applySyncedList(Array.from(itemsMap.values()));
-        });
+        const saved = localStorage.getItem('barcode_search_items_v2');
+        if (saved) {
+          appItems = JSON.parse(saved);
+        } else {
+          appItems = [];
+        }
       } catch (e) {
-        console.error('リレー接続エラー:', e);
-        updateSyncStatus(false);
+        console.error('データ読み込みエラー:', e);
+        appItems = [];
       }
-    }
-
-    function applySyncedList(list) {
-      list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-      appItems = list;
-
       updateBadgeCount();
       renderDataList();
-      updateSyncStatus(true);
-
-      if (currentSearchResult) {
-        const updatedHit = appItems.find(i => i.number === currentSearchResult.number);
-        if (updatedHit) {
-          displaySearchHit(updatedHit);
-        }
-      }
     }
 
-    async function saveItemToCloud(item) {
-      if (syncMode === 'firebase' && db && currentUser) {
-        try {
-          const itemDoc = doc(db, 'artifacts', appId, 'public', 'data', 'barcodes', item.id);
-          await setDoc(itemDoc, {
-            number: item.number,
-            text: item.text,
-            updatedAt: item.updatedAt
-          });
-          return true;
-        } catch (e) {
-          console.error('保存エラー:', e);
-          showToast('クラウドへの保存に失敗しました', 'error');
-          return false;
-        }
-      } else if (syncMode === 'gun' && gunNode) {
-        try {
-          gunNode.get(item.id).put({
-            number: item.number,
-            text: item.text,
-            updatedAt: item.updatedAt,
-            deleted: false
-          });
-          return true;
-        } catch (e) {
-          console.error('保存エラー:', e);
-          showToast('クラウドへの保存に失敗しました', 'error');
-          return false;
-        }
-      } else {
-        showToast('クラウドに接続されていないため保存できません', 'error');
-        return false;
-      }
-    }
-
-    async function deleteItemFromCloud(id) {
-      if (syncMode === 'firebase' && db && currentUser) {
-        try {
-          const itemDoc = doc(db, 'artifacts', appId, 'public', 'data', 'barcodes', id);
-          await deleteDoc(itemDoc);
-          return true;
-        } catch (e) {
-          console.error('削除エラー:', e);
-          showToast('クラウドからの削除に失敗しました', 'error');
-          return false;
-        }
-      } else if (syncMode === 'gun' && gunNode) {
-        try {
-          gunNode.get(id).put({
-            number: '',
-            text: '',
-            updatedAt: new Date().toISOString(),
-            deleted: true
-          });
-          return true;
-        } catch (e) {
-          console.error('削除エラー:', e);
-          showToast('クラウドからの削除に失敗しました', 'error');
-          return false;
-        }
-      } else {
-        showToast('クラウドに接続されていないため削除できません', 'error');
+    function saveDataToStorage() {
+      try {
+        localStorage.setItem('barcode_search_items_v2', JSON.stringify(appItems));
+        updateBadgeCount();
+        renderDataList();
+        return true;
+      } catch (e) {
+        console.error('データ保存エラー:', e);
+        showToast('データの保存に失敗しました', 'error');
         return false;
       }
     }
@@ -655,10 +492,11 @@
     // --- タブ切り替え ---
 
     window.switchTab = function(tabName) {
-      const views = ['search', 'manage'];
+      const views = ['search', 'manage', 'share'];
       views.forEach(v => {
         const section = document.getElementById(`view-${v}`);
         const btn = document.getElementById(`tab-btn-${v}`);
+        if (!section || !btn) return;
         if (v === tabName) {
           section.classList.remove('hidden');
           btn.classList.add('bg-white', 'text-brand-600', 'shadow-sm', 'font-semibold');
@@ -672,6 +510,8 @@
 
       if (tabName === 'manage') {
         renderDataList();
+      } else if (tabName === 'share') {
+        generateJSCodeOutput();
       } else if (tabName === 'search') {
         const searchInput = document.getElementById('search-input');
         if (searchInput) searchInput.focus();
@@ -859,7 +699,7 @@
       }
     };
 
-    window.handleSave = async function(e) {
+    window.handleSave = function(e) {
       e.preventDefault();
       const idInput = document.getElementById('edit-id').value;
       const numberInput = normalizeNumber(document.getElementById('input-number').value.trim());
@@ -883,42 +723,43 @@
         openConfirmModal(
           '上書き確認',
           `数字コード「${numberInput}」は既に登録されています。内容を上書きしますか？`,
-          async () => {
-            const updated = {
-              id: duplicate.id,
-              number: numberInput,
-              text: textInput,
-              updatedAt: new Date().toISOString()
-            };
-            const ok = await saveItemToCloud(updated);
-            if (ok) {
-              if (idInput && idInput !== duplicate.id) {
-                await deleteItemFromCloud(idInput);
-              }
+          () => {
+            duplicate.text = textInput;
+            duplicate.updatedAt = new Date().toISOString();
+            if (idInput && idInput !== duplicate.id) {
+              appItems = appItems.filter(i => i.id !== idInput);
+            }
+            if (saveDataToStorage()) {
               window.cancelEdit();
-              showToast('すべてのデバイスへ上書き同期しました');
+              showToast('データを上書き保存しました');
             }
           }
         );
         return;
       }
 
-      const saveBtn = document.getElementById('save-btn');
-      saveBtn.disabled = true;
+      if (idInput) {
+        // 編集保存
+        const target = appItems.find(item => item.id === idInput);
+        if (target) {
+          target.number = numberInput;
+          target.text = textInput;
+          target.updatedAt = new Date().toISOString();
+        }
+      } else {
+        // 新規追加
+        const newItem = {
+          id: 'item_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+          number: numberInput,
+          text: textInput,
+          updatedAt: new Date().toISOString()
+        };
+        appItems.unshift(newItem);
+      }
 
-      const itemToSave = {
-        id: idInput || ('item_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5)),
-        number: numberInput,
-        text: textInput,
-        updatedAt: new Date().toISOString()
-      };
-
-      const ok = await saveItemToCloud(itemToSave);
-      saveBtn.disabled = false;
-
-      if (ok) {
+      if (saveDataToStorage()) {
         window.cancelEdit();
-        showToast(idInput ? '変更をすべてのデバイスへ同期しました' : '登録し、すべてのデバイスへ同期しました');
+        showToast(idInput ? '変更を保存しました' : '新しいデータを登録しました');
       }
     };
 
@@ -954,10 +795,10 @@
 
       openConfirmModal(
         'データの削除',
-        `数字コード「${target.number}」のデータをすべてのデバイスから削除してもよろしいですか？`,
-        async () => {
-          const ok = await deleteItemFromCloud(id);
-          if (ok) {
+        `数字コード「${target.number}」のデータを削除してもよろしいですか？`,
+        () => {
+          appItems = appItems.filter(item => item.id !== id);
+          if (saveDataToStorage()) {
             if (document.getElementById('edit-id').value === id) {
               window.cancelEdit();
             }
@@ -970,7 +811,8 @@
     window.renderDataList = function() {
       const tbody = document.getElementById('data-table-body');
       const emptyMsg = document.getElementById('empty-table-msg');
-      const rawFilter = document.getElementById('list-search-input').value;
+      const searchInputEl = document.getElementById('list-search-input');
+      const rawFilter = searchInputEl ? searchInputEl.value : '';
       const filterText = rawFilter.toLowerCase();
       const normalizedFilterNum = normalizeNumber(rawFilter);
 
@@ -1029,6 +871,75 @@
         tr.appendChild(tdActions);
         tbody.appendChild(tr);
       });
+    };
+
+    // --- 3. 共有・バックアップ機能 ---
+
+    window.exportJSONFile = function() {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(appItems, null, 2));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", "barcode_search_data.json");
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      showToast('JSONファイルをダウンロードしました');
+    };
+
+    window.copyJSONText = function() {
+      const text = JSON.stringify(appItems, null, 2);
+      copyToClipboard(text, 'JSONテキストをコピーしました');
+    };
+
+    window.importJSONFile = function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        try {
+          const imported = JSON.parse(event.target.result);
+          if (Array.isArray(imported)) {
+            let count = 0;
+            imported.forEach(item => {
+              if (item.number && item.text) {
+                const normNum = normalizeNumber(item.number);
+                const exists = appItems.find(i => i.number === normNum);
+                if (!exists) {
+                  appItems.push({
+                    id: item.id || ('item_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5)),
+                    number: normNum,
+                    text: item.text,
+                    updatedAt: item.updatedAt || new Date().toISOString()
+                  });
+                  count++;
+                }
+              }
+            });
+            saveDataToStorage();
+            showToast(`${count}件のデータをインポートしました`);
+          } else {
+            showToast('無効なファイル形式です', 'error');
+          }
+        } catch (err) {
+          console.error(err);
+          showToast('JSONの解析に失敗しました', 'error');
+        }
+        e.target.value = '';
+      };
+      reader.readAsText(file);
+    };
+
+    function generateJSCodeOutput() {
+      const output = document.getElementById('js-code-output');
+      if (!output) return;
+      const jsonText = JSON.stringify(appItems, null, 2);
+      output.textContent = `const DEFAULT_DATA = ${jsonText};`;
+    }
+
+    window.copyDefaultDataCode = function() {
+      const output = document.getElementById('js-code-output');
+      if (!output) return;
+      copyToClipboard(output.textContent, 'JSコードをコピーしました');
     };
 
     // --- ユーティリティ（モーダル・トースト・クリップボード） ---
