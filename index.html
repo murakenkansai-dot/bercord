@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html lang="ja" class="h-full bg-slate-50">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>バーコード検索</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Google Fonts: Inter & Noto Sans JP -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'Noto Sans JP', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#eff6ff',
+              100: '#dbeafe',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* アニメーションとカスタムスクロールバー */
+    .fade-in {
+      animation: fadeIn 0.25s ease-out forwards;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body class="h-full flex flex-col text-slate-800 antialiased selection:bg-brand-500 selection:text-white">
+
+  <!-- ヘッダー -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+      <!-- ロゴ -->
+      <div class="flex items-center space-x-3 cursor-pointer" onclick="switchTab('search')">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white shadow-md shadow-brand-500/20">
+          <i class="fa-solid fa-barcode text-lg"></i>
+        </div>
+        <div>
+          <h1 class="font-bold text-lg leading-none text-slate-900">バーコード検索</h1>
+        </div>
+      </div>
+
+      <!-- タブナビゲーション -->
+      <nav class="flex items-center space-x-1 sm:space-x-2 bg-slate-100 p-1 rounded-xl">
+        <button id="tab-btn-search" onclick="switchTab('search')" 
+                class="px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center space-x-1.5 bg-white text-brand-600 shadow-sm">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <span>検索</span>
+        </button>
+        <button id="tab-btn-manage" onclick="switchTab('manage')" 
+                class="px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900 transition-all duration-200 flex items-center space-x-1.5">
+          <i class="fa-solid fa-list-check"></i>
+          <span>データ管理</span>
+          <span id="data-count-badge" class="ml-1 bg-slate-200 text-slate-700 text-xs px-1.5 py-0.5 rounded-full font-bold">0</span>
+        </button>
+        <button id="tab-btn-share" onclick="switchTab('share')" 
+                class="px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900 transition-all duration-200 flex items-center space-x-1.5">
+          <i class="fa-solid fa-share-nodes"></i>
+          <span class="hidden sm:inline">共有・同期</span>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- メインコンテンツ -->
+  <main class="flex-1 max-w-4xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-10">
+
+    <!-- 1. ホーム（検索・表示画面） -->
+    <section id="view-search" class="fade-in space-y-6">
+      <!-- 検索入力カード -->
+      <div class="bg-white rounded-2xl p-6 sm:p-8 border border-slate-200/80 shadow-sm">
+        <label for="search-input" class="block text-sm font-semibold text-slate-700 mb-2">
+          7〜13桁の数字を入力
+        </label>
+        <div class="relative flex flex-col sm:flex-row gap-3">
+          <div class="relative flex-1">
+            <input type="text" id="search-input" maxlength="13"
+                   class="w-full pl-11 pr-10 py-3.5 bg-slate-50 border border-slate-300 rounded-xl text-lg font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-brand-500 focus:bg-white transition-all"
+                   onkeydown="if(event.key==='Enter') executeSearch()"
+                   oninput="handleSearchInput(this)">
+            <i class="fa-solid fa-barcode absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-lg"></i>
+            <button id="clear-search-btn" onclick="clearSearch()" class="hidden absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+          <button onclick="executeSearch()" 
+                  class="w-full sm:w-auto px-8 py-3.5 bg-brand-600 hover:bg-brand-700 active:scale-95 text-white font-bold rounded-xl shadow-lg shadow-brand-500/25 transition-all duration-150 flex items-center justify-center space-x-2">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <span>表示</span>
+          </button>
+        </div>
+
+        <!-- リアルタイムバリデーションエラーメッセージ -->
+        <p id="search-error" class="hidden mt-2 text-xs font-semibold text-rose-500 flex items-center space-x-1">
+          <i class="fa-solid fa-circle-exclamation"></i>
+          <span id="search-error-text">数字は7〜13桁で入力してください。</span>
+        </p>
+      </div>
+
+      <!-- 検索結果表示エリア -->
+      <div id="search-result-area" class="hidden fade-in">
+        <!-- 成功時ヒット表示 -->
+        <div id="result-success" class="hidden bg-white rounded-2xl border border-brand-200 p-6 sm:p-8 shadow-md relative overflow-hidden">
+          <div class="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-brand-500 to-indigo-500"></div>
+          
+          <div class="flex flex-wrap items-center justify-between gap-2 pb-4 mb-4 border-b border-slate-100">
+            <div class="flex items-center space-x-2">
+              <span class="px-2.5 py-1 bg-brand-50 text-brand-700 rounded-md font-mono text-xs font-bold border border-brand-200/60">
+                CODE: <span id="result-code-display"></span>
+              </span>
+              <span id="result-updated-at" class="text-xs text-slate-400"></span>
+            </div>
+            
+            <button onclick="copyResultText()" class="text-xs font-semibold text-slate-600 hover:text-brand-600 bg-slate-100 hover:bg-brand-50 px-3 py-1.5 rounded-lg border border-slate-200 transition-colors flex items-center space-x-1.5">
+              <i class="fa-regular fa-copy"></i>
+              <span>本文をコピー</span>
+            </button>
+          </div>
+
+          <div class="text-slate-800 text-base sm:text-lg leading-relaxed font-normal whitespace-pre-wrap" id="result-text-display"></div>
+        </div>
+
+        <!-- 一致なし表示 -->
+        <div id="result-empty" class="hidden bg-white rounded-2xl border border-slate-200 p-8 text-center space-y-3">
+          <div class="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center text-slate-400 mx-auto text-xl">
+            <i class="fa-solid fa-folder-open"></i>
+          </div>
+          <h3 class="font-bold text-slate-700">該当するデータが見つかりません</h3>
+          <p class="text-xs text-slate-500 max-w-sm mx-auto">
+            入力した数字 <span id="empty-code-display" class="font-mono font-bold text-slate-700"></span> に一致する文字・文章は登録されていません。
+          </p>
+          <div class="pt-2">
+            <button onclick="prepareQuickRegister()" class="text-xs font-semibold text-brand-600 hover:text-brand-700 underline">
+              この数字で新しいデータを登録する
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. データ管理画面 -->
+    <section id="view-manage" class="hidden fade-in space-y-6">
+      
+      <!-- データ登録・編集カード -->
+      <div class="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-sm space-y-4">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+          <h2 id="form-title" class="font-bold text-slate-800 text-base flex items-center space-x-2">
+            <i class="fa-solid fa-plus-circle text-brand-600"></i>
+            <span>新規データ登録</span>
+          </h2>
+          <button id="cancel-edit-btn" onclick="cancelEdit()" class="hidden text-xs font-semibold text-slate-500 hover:text-slate-700">
+            キャンセル
+          </button>
+        </div>
+
+        <form id="save-form" onsubmit="handleSave(event)" class="space-y-4">
+          <input type="hidden" id="edit-id" value="">
+          
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label for="input-number" class="block text-xs font-semibold text-slate-700 mb-1">
+                数字コード (7〜13桁) <span class="text-rose-500">*</span>
+              </label>
+              <input type="text" id="input-number" required maxlength="13"
+                     class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:bg-white"
+                     oninput="validateManageNumberInput(this)">
+              <p id="manage-number-error" class="hidden mt-1 text-xs text-rose-500">7〜13桁の全角数字で入力してください。</p>
+            </div>
+            
+            <div class="md:col-span-2">
+              <label for="input-text" class="block text-xs font-semibold text-slate-700 mb-1">
+                対応する文字・文章 <span class="text-rose-500">*</span>
+              </label>
+              <textarea id="input-text" required rows="3"
+                        class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:bg-white"></textarea>
+            </div>
+          </div>
+
+          <div class="flex justify-end pt-2">
+            <button type="submit" id="save-btn" 
+                    class="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-xl text-sm shadow-md transition-all">
+              <i class="fa-solid fa-floppy-disk mr-1.5"></i>
+              <span>登録を保存</span>
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- 登録データ一覧リスト -->
+      <div class="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+        <div class="p-4 sm:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <h2 class="font-bold text-slate-800 text-base flex items-center space-x-2">
+            <i class="fa-solid fa-database text-slate-500"></i>
+            <span>登録済みデータ一覧</span>
+          </h2>
+
+          <!-- 一覧内検索 -->
+          <div class="relative w-full sm:w-64">
+            <input type="text" id="list-search-input" placeholder="一覧から検索..." oninput="renderDataList()"
+                   class="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-brand-500">
+            <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm text-slate-600">
+            <thead class="bg-slate-50 text-xs font-semibold text-slate-500 border-b border-slate-200">
+              <tr>
+                <th class="px-4 py-3 w-36">数字コード</th>
+                <th class="px-4 py-3">対応する文字・文章</th>
+                <th class="px-4 py-3 w-32 text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="data-table-body" class="divide-y divide-slate-100">
+              <!-- JavaScriptでテーブル行を生成 -->
+            </tbody>
+          </table>
+        </div>
+
+        <div id="empty-table-msg" class="hidden p-8 text-center text-slate-400 text-xs">
+          登録データがありません。
+        </div>
+      </div>
+
+    </section>
+
+    <!-- 3. 共有・バックアップ画面 -->
+    <section id="view-share" class="hidden fade-in space-y-6">
+
+      <!-- GitHub Pagesでの共有ガイド説明 -->
+      <div class="bg-gradient-to-r from-brand-600 to-indigo-600 rounded-2xl p-6 text-white shadow-md">
+        <div class="flex items-start space-x-3">
+          <i class="fa-brands fa-github text-3xl mt-1 opacity-90"></i>
+          <div>
+            <h2 class="font-bold text-lg mb-1">GitHub Pagesでの全ユーザー共通化について</h2>
+            <p class="text-xs sm:text-sm text-brand-100 leading-relaxed">
+              ブラウザ（`localStorage`）へのデータ追加は訪問者個人のPCのみに保存されます。<br>
+              **全ての訪問者に同じデータを初期表示させたい場合**は、以下の「JSコード形式でコピー」で出力したデータをソースコード（`index.html` 内の `DEFAULT_DATA` 定数）に貼り付けてGitHubにPushしてください。
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+        <!-- バックアップ・エクスポート -->
+        <div class="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-sm space-y-4">
+          <h3 class="font-bold text-slate-800 text-sm flex items-center space-x-2">
+            <i class="fa-solid fa-file-export text-brand-600"></i>
+            <span>エクスポート（保存・コピー）</span>
+          </h3>
+          <p class="text-xs text-slate-500 leading-normal">
+            現在保存されているデータをJSON形式ファイルとして保存、またはクリップボードにコピーします。
+          </p>
+
+          <div class="flex flex-col gap-2 pt-2">
+            <button onclick="exportJSONFile()" class="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition-colors flex items-center justify-center space-x-2">
+              <i class="fa-solid fa-download"></i>
+              <span>JSONファイルでダウンロード</span>
+            </button>
+            <button onclick="copyJSONText()" class="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition-colors flex items-center justify-center space-x-2">
+              <i class="fa-regular fa-copy"></i>
+              <span>JSONテキストをコピー</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- インポート -->
+        <div class="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-sm space-y-4">
+          <h3 class="font-bold text-slate-800 text-sm flex items-center space-x-2">
+            <i class="fa-solid fa-file-import text-indigo-600"></i>
+            <span>インポート（読み込み）</span>
+          </h3>
+          <p class="text-xs text-slate-500 leading-normal">
+            保存しておいたJSONファイルを読み込み、現在のブラウザデータに追加・同期します。
+          </p>
+
+          <div class="space-y-3 pt-2">
+            <input type="file" id="import-file-input" accept=".json" class="hidden" onchange="importJSONFile(event)">
+            <button onclick="document.getElementById('import-file-input').click()" 
+                    class="w-full px-4 py-2.5 border-2 border-dashed border-slate-300 hover:border-brand-500 hover:bg-brand-50/50 text-slate-600 font-semibold rounded-xl text-xs transition-all flex items-center justify-center space-x-2">
+              <i class="fa-solid fa-upload"></i>
+              <span>JSONファイルを選択して読み込み</span>
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- GitHubソース用 JSコード出力カード -->
+      <div class="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-sm space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="font-bold text-slate-800 text-sm flex items-center space-x-2">
+            <i class="fa-solid fa-code text-emerald-600"></i>
+            <span>GitHub Pages組込用 JSコード生成</span>
+          </h3>
+          <button onclick="copyDefaultDataCode()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs shadow-sm transition-colors flex items-center space-x-1.5">
+            <i class="fa-regular fa-copy"></i>
+            <span>コードをコピー</span>
+          </button>
+        </div>
+        <p class="text-xs text-slate-500">
+          以下のコードをコピーし、このHTMLファイルの <code class="bg-slate-100 text-emerald-700 px-1 py-0.5 rounded font-mono">DEFAULT_DATA</code> 部分に上書き貼り付けしてGitHubにプッシュしてください。
+        </p>
+        
+        <div class="relative">
+          <pre id="js-code-output" class="bg-slate-900 text-emerald-400 p-4 rounded-xl text-xs font-mono max-h-60 overflow-y-auto leading-relaxed selection:bg-emerald-700 selection:text-white"></pre>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- フッター -->
+  <footer class="mt-auto bg-white border-t border-slate-200 py-6 text-center text-xs text-slate-400">
+    <div class="max-w-4xl mx-auto px-4">
+      <p>バーコード検索</p>
+    </div>
+  </footer>
+
+  <!-- 即時フルスクリーン表示モーダル（画面全体表示・10秒タイマー） -->
+  <div id="fullscreen-overlay" class="hidden fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col justify-between p-6 sm:p-12 text-white fade-in select-none">
+    
+    <!-- ヘッダーエリア：残時間と閉じるボタン -->
+    <div class="w-full max-w-5xl mx-auto flex items-center justify-between">
+      <!-- 残り時間表示 & プログレスバー -->
+      <div class="flex items-center space-x-4 bg-slate-900/80 border border-slate-800 px-4 py-2 rounded-2xl">
+        <i class="fa-solid fa-stopwatch text-brand-400 text-lg animate-pulse"></i>
+        <div class="flex flex-col space-y-1">
+          <span class="text-xs text-slate-400 font-medium">
+            自動クリアまであと <span id="countdown-sec" class="text-brand-400 font-bold font-mono text-sm">10</span> 秒
+          </span>
+          <!-- プログレスバー -->
+          <div class="w-36 sm:w-48 bg-slate-800 h-1.5 rounded-full overflow-hidden">
+            <div id="countdown-bar" class="bg-gradient-to-r from-brand-500 to-indigo-400 h-full w-full transition-all duration-100 ease-linear"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- コードバッジ -->
+      <div class="hidden sm:flex items-center space-x-2 bg-slate-900/80 border border-slate-800 px-4 py-2 rounded-2xl">
+        <span class="text-xs text-slate-400">CODE:</span>
+        <span id="fullscreen-code" class="font-mono text-brand-300 font-bold text-base tracking-widest"></span>
+      </div>
+
+      <!-- バツボタン -->
+      <button onclick="closeFullScreenResult()" 
+              class="w-12 h-12 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700/80 hover:border-slate-500 text-slate-300 hover:text-white flex items-center justify-center transition-all duration-150 transform hover:scale-105 active:scale-95 shadow-lg">
+        <i class="fa-solid fa-xmark text-2xl"></i>
+      </button>
+    </div>
+
+    <!-- メインテキスト表示領域（ダイナミックフォントサイズ） -->
+    <div class="w-full max-w-5xl mx-auto flex-1 flex items-center justify-center my-6 overflow-y-auto">
+      <div id="fullscreen-text-container" class="w-full text-center px-4">
+        <p id="fullscreen-text" class="whitespace-pre-wrap font-bold leading-relaxed tracking-wide text-white drop-shadow-md select-text"></p>
+      </div>
+    </div>
+
+    <!-- フッターヒント -->
+    <div class="w-full max-w-5xl mx-auto text-center text-xs text-slate-500">
+      Escキー または 「×」ボタン で閉じて次の入力へ
+    </div>
+  </div>
+
+  <!-- カスタムモーダル（削除確認用） -->
+  <div id="modal-backdrop" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-xl fade-in">
+      <h3 id="modal-title" class="font-bold text-slate-900 text-base">確認</h3>
+      <p id="modal-message" class="text-xs text-slate-600 leading-relaxed"></p>
+      <div class="flex justify-end space-x-2 pt-2">
+        <button id="modal-cancel-btn" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition-colors">
+          キャンセル
+        </button>
+        <button id="modal-confirm-btn" class="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg transition-colors">
+          実行
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- トースト通知 -->
+  <div id="toast" class="fixed bottom-6 right-6 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none flex items-center space-x-2 bg-slate-900 text-white text-xs px-4 py-3 rounded-xl shadow-lg border border-slate-700">
+    <i id="toast-icon" class="fa-solid fa-circle-check text-emerald-400"></i>
+    <span id="toast-message" class="font-medium"></span>
+  </div>
+
+  <script>
+    /**
+     * GitHub Pages初期表示用データ定数
+     * サイト管理者が全体公開データを更新したい場合、この配列の中身を差し替えてGitHubへ更新プッシュします。
+     */
+    const DEFAULT_DATA = [];
+
+    const STORAGE_KEY = 'barcode_search_items_v1';
+    let appItems = [];
+    let currentSearchResult = null;
+    let countdownTimerId = null;
+
+    // 初期化処理
+    window.onload = function() {
+      loadData();
+      renderDataList();
+      renderJSCodeOutput();
+
+      // Escキーでフルスクリーン結果表示を閉じる
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+          const fsOverlay = document.getElementById('fullscreen-overlay');
+          if (!fsOverlay.classList.contains('hidden')) {
+            closeFullScreenResult();
+          }
+        }
+      });
+
+      // 初期フォーカスを検索入力欄に設定
+      const searchInput = document.getElementById('search-input');
+      if (searchInput) searchInput.focus();
+    };
+
+    // --- データ保存・読み込み管理 ---
+
+    function loadData() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          // 既存データに半角数字が含まれていた場合も全角数字へ正規化して移行
+          appItems = parsed.map(item => ({
+            ...item,
+            number: normalizeNumber(item.number)
+          }));
+        } else {
+          appItems = [...DEFAULT_DATA];
+          saveDataToStorage();
+        }
+      } catch (e) {
+        console.error('データ読み込みエラー:', e);
+        appItems = [...DEFAULT_DATA];
+      }
+      updateBadgeCount();
+    }
+
+    function saveDataToStorage() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(appItems));
+      } catch (e) {
+        console.error('保存エラー:', e);
+        showToast('ブラウザの保存容量が上限に達している可能性があります', 'error');
+      }
+      updateBadgeCount();
+      renderJSCodeOutput();
+    }
+
+    function updateBadgeCount() {
+      const badge = document.getElementById('data-count-badge');
+      if (badge) badge.textContent = appItems.length;
+    }
+
+    /**
+     * 半角数字を全角数字へ変換し、数字以外の文字を除去する
+     */
+    function normalizeNumber(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/[0-9]/g, s => String.fromCharCode(s.charCodeAt(0) + 0xFEE0))
+        .replace(/[^０-９]/g, '');
+    }
+
+    // --- タブ切り替え ---
+
+    function switchTab(tabName) {
+      const views = ['search', 'manage', 'share'];
+      views.forEach(v => {
+        const section = document.getElementById(`view-${v}`);
+        const btn = document.getElementById(`tab-btn-${v}`);
+        if (v === tabName) {
+          section.classList.remove('hidden');
+          btn.classList.add('bg-white', 'text-brand-600', 'shadow-sm', 'font-semibold');
+          btn.classList.remove('text-slate-600', 'font-medium');
+        } else {
+          section.classList.add('hidden');
+          btn.classList.remove('bg-white', 'text-brand-600', 'shadow-sm', 'font-semibold');
+          btn.classList.add('text-slate-600', 'font-medium');
+        }
+      });
+
+      if (tabName === 'manage') {
+        renderDataList();
+      } else if (tabName === 'share') {
+        renderJSCodeOutput();
+      } else if (tabName === 'search') {
+        const searchInput = document.getElementById('search-input');
+        if (searchInput) searchInput.focus();
+      }
+    }
+
+    // --- 1. 検索機能 & 即時フルスクリーン表示 ---
+
+    function handleSearchInput(input) {
+      validateSearchInput(input);
+      const val = input.value;
+
+      // 7〜13桁の数字が入力されたらリアルタイム照合し、ヒットすれば即座にフルスクリーン表示
+      if (val.length >= 7 && val.length <= 13) {
+        const hit = appItems.find(item => item.number === val);
+        if (hit) {
+          displaySearchHit(hit);
+          openFullScreenResult(hit);
+        }
+      }
+    }
+
+    function validateSearchInput(input) {
+      // IME変換確定前の文字列を壊さないよう、全角化済みの値で比較・反映
+      const val = normalizeNumber(input.value);
+      if (input.value !== val) {
+        input.value = val;
+      }
+      const clearBtn = document.getElementById('clear-search-btn');
+      const err = document.getElementById('search-error');
+      
+      if (val.length > 0) {
+        clearBtn.classList.remove('hidden');
+      } else {
+        clearBtn.classList.add('hidden');
+        err.classList.add('hidden');
+      }
+    }
+
+    function clearSearch() {
+      const input = document.getElementById('search-input');
+      input.value = '';
+      document.getElementById('clear-search-btn').classList.add('hidden');
+      document.getElementById('search-error').classList.add('hidden');
+      document.getElementById('search-result-area').classList.add('hidden');
+      currentSearchResult = null;
+      input.focus();
+    }
+
+    function executeSearch() {
+      const input = document.getElementById('search-input');
+      const val = normalizeNumber(input.value);
+      input.value = val;
+
+      const err = document.getElementById('search-error');
+      const resultArea = document.getElementById('search-result-area');
+      const successBox = document.getElementById('result-success');
+      const emptyBox = document.getElementById('result-empty');
+
+      if (val.length < 7 || val.length > 13) {
+        err.classList.remove('hidden');
+        resultArea.classList.add('hidden');
+        return;
+      }
+
+      err.classList.add('hidden');
+      resultArea.classList.remove('hidden');
+
+      const hit = appItems.find(item => item.number === val);
+      if (hit) {
+        displaySearchHit(hit);
+        openFullScreenResult(hit);
+      } else {
+        currentSearchResult = null;
+        successBox.classList.add('hidden');
+        emptyBox.classList.remove('hidden');
+        document.getElementById('empty-code-display').textContent = val;
+      }
+    }
+
+    function displaySearchHit(item) {
+      currentSearchResult = item;
+      const resultArea = document.getElementById('search-result-area');
+      const successBox = document.getElementById('result-success');
+      const emptyBox = document.getElementById('result-empty');
+
+      resultArea.classList.remove('hidden');
+      emptyBox.classList.add('hidden');
+      successBox.classList.remove('hidden');
+
+      document.getElementById('result-code-display').textContent = item.number;
+      document.getElementById('result-text-display').textContent = item.text;
+      
+      if (item.updatedAt) {
+        const d = new Date(item.updatedAt);
+        document.getElementById('result-updated-at').textContent = `登録・更新: ${d.toLocaleDateString('ja-JP')}`;
+      } else {
+        document.getElementById('result-updated-at').textContent = '';
+      }
+    }
+
+    function openFullScreenResult(item) {
+      // 既存のタイマーがあればクリア
+      if (countdownTimerId) {
+        clearInterval(countdownTimerId);
+        countdownTimerId = null;
+      }
+
+      const overlay = document.getElementById('fullscreen-overlay');
+      const codeEl = document.getElementById('fullscreen-code');
+      const textEl = document.getElementById('fullscreen-text');
+      const secEl = document.getElementById('countdown-sec');
+      const barEl = document.getElementById('countdown-bar');
+
+      codeEl.textContent = item.number;
+      textEl.textContent = item.text;
+
+      // 文字の長さに応じたダイナミックフォントサイズ調整
+      const len = item.text.length;
+      textEl.className = 'whitespace-pre-wrap font-bold leading-relaxed tracking-wide text-white drop-shadow-md select-text ';
+      if (len <= 15) {
+        textEl.className += 'text-4xl sm:text-6xl md:text-7xl';
+      } else if (len <= 50) {
+        textEl.className += 'text-2xl sm:text-4xl md:text-5xl';
+      } else if (len <= 150) {
+        textEl.className += 'text-xl sm:text-2xl md:text-3xl';
+      } else {
+        textEl.className += 'text-base sm:text-xl md:text-2xl text-left';
+      }
+
+      // プログレスバー＆タイマー初期化（10秒 = 10000ms）
+      const totalMs = 10000;
+      const startTime = Date.now();
+      secEl.textContent = '10';
+      barEl.style.width = '100%';
+
+      overlay.classList.remove('hidden');
+
+      countdownTimerId = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const remainingMs = Math.max(0, totalMs - elapsed);
+        const remainingSec = Math.ceil(remainingMs / 1000);
+        const pct = (remainingMs / totalMs) * 100;
+
+        secEl.textContent = remainingSec;
+        barEl.style.width = `${pct}%`;
+
+        if (remainingMs <= 0) {
+          closeFullScreenResult();
+        }
+      }, 100);
+    }
+
+    function closeFullScreenResult() {
+      if (countdownTimerId) {
+        clearInterval(countdownTimerId);
+        countdownTimerId = null;
+      }
+
+      const overlay = document.getElementById('fullscreen-overlay');
+      overlay.classList.add('hidden');
+
+      // 次のコード入力に備えて入力欄をクリア＆フォーカス
+      const searchInput = document.getElementById('search-input');
+      searchInput.value = '';
+      document.getElementById('clear-search-btn').classList.add('hidden');
+      document.getElementById('search-error').classList.add('hidden');
+      searchInput.focus();
+    }
+
+    function copyResultText() {
+      if (!currentSearchResult) return;
+      copyToClipboard(currentSearchResult.text, '表示テキストをコピーしました');
+    }
+
+    function prepareQuickRegister() {
+      const val = normalizeNumber(document.getElementById('search-input').value);
+      switchTab('manage');
+      cancelEdit();
+      document.getElementById('input-number').value = val;
+      document.getElementById('input-text').focus();
+    }
+
+    // --- 2. データ管理機能 ---
+
+    function validateManageNumberInput(input) {
+      const val = normalizeNumber(input.value);
+      if (input.value !== val) {
+        input.value = val;
+      }
+    }
+
+    function handleSave(e) {
+      e.preventDefault();
+      const idInput = document.getElementById('edit-id').value;
+      const numberInput = normalizeNumber(document.getElementById('input-number').value.trim());
+      const textInput = document.getElementById('input-text').value.trim();
+      const err = document.getElementById('manage-number-error');
+
+      if (numberInput.length < 7 || numberInput.length > 13) {
+        err.classList.remove('hidden');
+        return;
+      }
+      err.classList.add('hidden');
+
+      if (!textInput) {
+        showToast('対応する文字・文章を入力してください', 'error');
+        return;
+      }
+
+      // 重複チェック（自分以外のレコードに同じ番号が存在するか）
+      const duplicate = appItems.find(item => item.number === numberInput && item.id !== idInput);
+      if (duplicate) {
+        openConfirmModal(
+          '上書き確認',
+          `数字コード「${numberInput}」は既に登録されています。内容を上書きしますか？`,
+          () => {
+            duplicate.text = textInput;
+            duplicate.updatedAt = new Date().toISOString();
+            // もし別IDを編集中だった場合は元のレコードを削除
+            if (idInput) {
+              appItems = appItems.filter(item => item.id !== idInput);
+            }
+            saveDataToStorage();
+            renderDataList();
+            cancelEdit();
+            showToast('データを上書き保存しました');
+          }
+        );
+        return;
+      }
+
+      if (idInput) {
+        // 既存編集
+        const target = appItems.find(item => item.id === idInput);
+        if (target) {
+          target.number = numberInput;
+          target.text = textInput;
+          target.updatedAt = new Date().toISOString();
+          showToast('データを更新しました');
+        }
+      } else {
+        // 新規追加
+        appItems.unshift({
+          id: 'item_' + Date.now() + Math.random().toString(36).substr(2, 4),
+          number: numberInput,
+          text: textInput,
+          updatedAt: new Date().toISOString()
+        });
+        showToast('新しいデータを登録しました');
+      }
+
+      saveDataToStorage();
+      renderDataList();
+      cancelEdit();
+    }
+
+    function startEdit(id) {
+      const target = appItems.find(item => item.id === id);
+      if (!target) return;
+
+      document.getElementById('edit-id').value = target.id;
+      document.getElementById('input-number').value = target.number;
+      document.getElementById('input-text').value = target.text;
+
+      document.getElementById('form-title').innerHTML = '<i class="fa-solid fa-pen-to-square text-amber-500"></i><span>データの編集</span>';
+      document.getElementById('save-btn').innerHTML = '<i class="fa-solid fa-check mr-1.5"></i><span>変更を保存</span>';
+      document.getElementById('cancel-edit-btn').classList.remove('hidden');
+
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function cancelEdit() {
+      document.getElementById('edit-id').value = '';
+      document.getElementById('input-number').value = '';
+      document.getElementById('input-text').value = '';
+      document.getElementById('manage-number-error').classList.add('hidden');
+
+      document.getElementById('form-title').innerHTML = '<i class="fa-solid fa-plus-circle text-brand-600"></i><span>新規データ登録</span>';
+      document.getElementById('save-btn').innerHTML = '<i class="fa-solid fa-floppy-disk mr-1.5"></i><span>登録を保存</span>';
+      document.getElementById('cancel-edit-btn').classList.add('hidden');
+    }
+
+    function confirmDelete(id) {
+      const target = appItems.find(item => item.id === id);
+      if (!target) return;
+
+      openConfirmModal(
+        'データの削除',
+        `数字コード「${target.number}」のデータを削除してもよろしいですか？`,
+        () => {
+          appItems = appItems.filter(item => item.id !== id);
+          saveDataToStorage();
+          renderDataList();
+          if (document.getElementById('edit-id').value === id) {
+            cancelEdit();
+          }
+          showToast('データを削除しました');
+        }
+      );
+    }
+
+    function renderDataList() {
+      const tbody = document.getElementById('data-table-body');
+      const emptyMsg = document.getElementById('empty-table-msg');
+      const rawFilter = document.getElementById('list-search-input').value;
+      const filterText = rawFilter.toLowerCase();
+      // 半角数字で検索された場合でも全角数字のデータにヒットするように正規化文字列も用意
+      const normalizedFilterNum = normalizeNumber(rawFilter);
+
+      tbody.innerHTML = '';
+
+      const filtered = appItems.filter(item => 
+        item.number.includes(filterText) || 
+        (normalizedFilterNum && item.number.includes(normalizedFilterNum)) || 
+        item.text.toLowerCase().includes(filterText)
+      );
+
+      if (filtered.length === 0) {
+        emptyMsg.classList.remove('hidden');
+        return;
+      }
+
+      emptyMsg.classList.add('hidden');
+
+      filtered.forEach(item => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-50/80 transition-colors';
+
+        // 数字コードセル
+        const tdNum = document.createElement('td');
+        tdNum.className = 'px-4 py-3 font-mono font-bold text-slate-800 whitespace-nowrap align-top';
+        tdNum.textContent = item.number;
+
+        // テキストセル
+        const tdText = document.createElement('td');
+        tdText.className = 'px-4 py-3 text-slate-600 align-top max-w-md';
+        const previewDiv = document.createElement('div');
+        previewDiv.className = 'line-clamp-2 whitespace-pre-wrap text-xs sm:text-sm';
+        previewDiv.textContent = item.text;
+        tdText.appendChild(previewDiv);
+
+        // 操作セル
+        const tdActions = document.createElement('td');
+        tdActions.className = 'px-4 py-3 text-right whitespace-nowrap align-top space-x-1';
+
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'px-2.5 py-1.5 bg-slate-100 hover:bg-brand-50 text-slate-600 hover:text-brand-600 rounded-lg text-xs font-semibold transition-colors';
+        editBtn.innerHTML = '<i class="fa-solid fa-pen"></i>';
+        editBtn.title = '編集';
+        editBtn.onclick = () => startEdit(item.id);
+
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'px-2.5 py-1.5 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 rounded-lg text-xs font-semibold transition-colors';
+        delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+        delBtn.title = '削除';
+        delBtn.onclick = () => confirmDelete(item.id);
+
+        tdActions.appendChild(editBtn);
+        tdActions.appendChild(delBtn);
+
+        tr.appendChild(tdNum);
+        tr.appendChild(tdText);
+        tr.appendChild(tdActions);
+        tbody.appendChild(tr);
+      });
+    }
+
+    // --- 3. 共有・バックアップ機能 ---
+
+    function exportJSONFile() {
+      try {
+        const jsonStr = JSON.stringify(appItems, null, 2);
+        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `barcode-search-data-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('JSONファイルをダウンロードしました');
+      } catch (e) {
+        console.error(e);
+        showToast('エクスポートに失敗しました', 'error');
+      }
+    }
+
+    function copyJSONText() {
+      const jsonStr = JSON.stringify(appItems, null, 2);
+      copyToClipboard(jsonStr, 'JSONデータをクリップボードにコピーしました');
+    }
+
+    function importJSONFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const imported = JSON.parse(e.target.result);
+          if (!Array.isArray(imported)) {
+            throw new Error('配列形式のJSONではありません');
+          }
+
+          let addedCount = 0;
+          imported.forEach(item => {
+            if (item.number && item.text) {
+              const normNum = normalizeNumber(item.number);
+              if (!normNum) return;
+              const idx = appItems.findIndex(i => i.number === normNum);
+              if (idx !== -1) {
+                appItems[idx].text = item.text;
+              } else {
+                appItems.push({
+                  id: item.id || ('item_' + Date.now() + Math.random().toString(36).substr(2, 4)),
+                  number: normNum,
+                  text: item.text,
+                  updatedAt: item.updatedAt || new Date().toISOString()
+                });
+              }
+              addedCount++;
+            }
+          });
+
+          saveDataToStorage();
+          renderDataList();
+          showToast(`${addedCount}件のデータを読み込みました`);
+        } catch (err) {
+          console.error(err);
+          showToast('JSONファイルの読み込みに失敗しました', 'error');
+        } finally {
+          event.target.value = '';
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function renderJSCodeOutput() {
+      const output = document.getElementById('js-code-output');
+      if (!output) return;
+      const code = `const DEFAULT_DATA = ${JSON.stringify(appItems, null, 2)};`;
+      output.textContent = code;
+    }
+
+    function copyDefaultDataCode() {
+      const code = `const DEFAULT_DATA = ${JSON.stringify(appItems, null, 2)};`;
+      copyToClipboard(code, 'GitHub組込用JSコードをコピーしました');
+    }
+
+    // --- ユーティリティ（モーダル・トースト・クリップボード） ---
+
+    function openConfirmModal(title, message, onConfirm) {
+      const backdrop = document.getElementById('modal-backdrop');
+      document.getElementById('modal-title').textContent = title;
+      document.getElementById('modal-message').textContent = message;
+
+      const cancelBtn = document.getElementById('modal-cancel-btn');
+      const confirmBtn = document.getElementById('modal-confirm-btn');
+
+      const close = () => {
+        backdrop.classList.add('hidden');
+      };
+
+      cancelBtn.onclick = close;
+      confirmBtn.onclick = () => {
+        close();
+        if (onConfirm) onConfirm();
+      };
+
+      backdrop.classList.remove('hidden');
+    }
+
+    let toastTimeout = null;
+    function showToast(message, type = 'success') {
+      const toast = document.getElementById('toast');
+      const icon = document.getElementById('toast-icon');
+      const msgEl = document.getElementById('toast-message');
+
+      msgEl.textContent = message;
+      if (type === 'error') {
+        icon.className = 'fa-solid fa-circle-exclamation text-rose-400';
+      } else {
+        icon.className = 'fa-solid fa-circle-check text-emerald-400';
+      }
+
+      toast.classList.remove('translate-y-20', 'opacity-0');
+      if (toastTimeout) clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => {
+        toast.classList.add('translate-y-20', 'opacity-0');
+      }, 3000);
+    }
+
+    function copyToClipboard(text, successMessage) {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        showToast(successMessage || 'コピーしました');
+      } catch (err) {
+        console.error('コピー失敗:', err);
+        showToast('コピーに失敗しました', 'error');
+      }
+      document.body.removeChild(textarea);
+    }
+  </script>
+</body>
+</html>
