@@ -75,11 +75,10 @@
           <span>データ管理</span>
           <span id="data-count-badge" class="ml-1 bg-slate-200 text-slate-700 text-xs px-1.5 py-0.5 rounded-full font-bold">0</span>
         </button>
-        <button id="tab-btn-share" onclick="switchTab('share')" 
-                class="px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900 transition-all duration-200 flex items-center space-x-1.5">
-          <i class="fa-solid fa-share-nodes"></i>
-          <span class="hidden sm:inline">共有・同期</span>
-        </button>
+        <div id="sync-status" class="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium text-emerald-600 bg-emerald-50 rounded-lg border border-emerald-200/60">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>クラウド同期中</span>
+        </div>
       </nav>
     </div>
   </header>
@@ -408,24 +407,23 @@
     <span id="toast-message" class="font-medium"></span>
   </div>
 
-  <script>
-    /**
-     * GitHub Pages初期表示用データ定数
-     * サイト管理者が全体公開データを更新したい場合、この配列の中身を差し替えてGitHubへ更新プッシュします。
-     */
-    const DEFAULT_DATA = [];
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    const STORAGE_KEY = 'barcode_search_items_v1';
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'barcode-search-app';
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+
+    let db = null;
+    let auth = null;
+    let currentUser = null;
     let appItems = [];
     let currentSearchResult = null;
     let countdownTimerId = null;
 
     // 初期化処理
-    window.onload = function() {
-      loadData();
-      renderDataList();
-      renderJSCodeOutput();
-
+    window.addEventListener('DOMContentLoaded', async function() {
       // Escキーでフルスクリーン結果表示を閉じる
       document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
@@ -439,40 +437,121 @@
       // 初期フォーカスを検索入力欄に設定
       const searchInput = document.getElementById('search-input');
       if (searchInput) searchInput.focus();
-    };
 
-    // --- データ保存・読み込み管理 ---
+      // クラウド同期の初期化
+      if (firebaseConfig) {
+        try {
+          const app = initializeApp(firebaseConfig);
+          db = getFirestore(app);
+          auth = getAuth(app);
 
-    function loadData() {
-      try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          // 既存データに半角数字が含まれていた場合も全角数字へ正規化して移行
-          appItems = parsed.map(item => ({
-            ...item,
-            number: normalizeNumber(item.number)
-          }));
-        } else {
-          appItems = [...DEFAULT_DATA];
-          saveDataToStorage();
+          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+            const cred = await signInWithCustomToken(auth, __initial_auth_token);
+            currentUser = cred.user;
+          } else {
+            const cred = await signInAnonymously(auth);
+            currentUser = cred.user;
+          }
+
+          startRealtimeSync();
+        } catch (err) {
+          console.error('クラウド接続エラー:', err);
+          updateSyncStatus(false);
+          showToast('クラウド同期の接続に失敗しました', 'error');
         }
-      } catch (e) {
-        console.error('データ読み込みエラー:', e);
-        appItems = [...DEFAULT_DATA];
+      } else {
+        updateSyncStatus(false);
       }
-      updateBadgeCount();
+    });
+
+    function updateSyncStatus(isOnline) {
+      const statusEl = document.getElementById('sync-status');
+      if (!statusEl) return;
+      if (isOnline) {
+        statusEl.className = 'hidden sm:flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium text-emerald-600 bg-emerald-50 rounded-lg border border-emerald-200/60';
+        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span><span>全デバイス同期中</span>';
+      } else {
+        statusEl.className = 'hidden sm:flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium text-amber-600 bg-amber-50 rounded-lg border border-amber-200/60';
+        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span><span>オフライン</span>';
+      }
     }
 
-    function saveDataToStorage() {
+    // --- リアルタイムクラウド同期 ---
+
+    function startRealtimeSync() {
+      if (!db || !currentUser) return;
+      const itemsCol = collection(db, 'artifacts', appId, 'public', 'data', 'barcodes');
+
+      onSnapshot(itemsCol, (snapshot) => {
+        const list = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (data.number && data.text) {
+            list.push({
+              id: docSnap.id,
+              number: normalizeNumber(data.number),
+              text: data.text,
+              updatedAt: data.updatedAt || ''
+            });
+          }
+        });
+
+        // 更新日時の新しい順にソート
+        list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+        appItems = list;
+
+        updateBadgeCount();
+        renderDataList();
+        updateSyncStatus(true);
+
+        // 検索画面で現在表示中の結果があれば最新内容に反映
+        if (currentSearchResult) {
+          const updatedHit = appItems.find(i => i.number === currentSearchResult.number);
+          if (updatedHit) {
+            displaySearchHit(updatedHit);
+          }
+        }
+      }, (error) => {
+        console.error('データ同期エラー:', error);
+        updateSyncStatus(false);
+        showToast('データの同期中にエラーが発生しました', 'error');
+      });
+    }
+
+    async function saveItemToCloud(item) {
+      if (!db || !currentUser) {
+        showToast('クラウドに接続されていないため保存できません', 'error');
+        return false;
+      }
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(appItems));
+        const itemDoc = doc(db, 'artifacts', appId, 'public', 'data', 'barcodes', item.id);
+        await setDoc(itemDoc, {
+          number: item.number,
+          text: item.text,
+          updatedAt: item.updatedAt
+        });
+        return true;
       } catch (e) {
         console.error('保存エラー:', e);
-        showToast('ブラウザの保存容量が上限に達している可能性があります', 'error');
+        showToast('クラウドへの保存に失敗しました', 'error');
+        return false;
       }
-      updateBadgeCount();
-      renderJSCodeOutput();
+    }
+
+    async function deleteItemFromCloud(id) {
+      if (!db || !currentUser) {
+        showToast('クラウドに接続されていないため削除できません', 'error');
+        return false;
+      }
+      try {
+        const itemDoc = doc(db, 'artifacts', appId, 'public', 'data', 'barcodes', id);
+        await deleteDoc(itemDoc);
+        return true;
+      } catch (e) {
+        console.error('削除エラー:', e);
+        showToast('クラウドからの削除に失敗しました', 'error');
+        return false;
+      }
     }
 
     function updateBadgeCount() {
@@ -492,8 +571,8 @@
 
     // --- タブ切り替え ---
 
-    function switchTab(tabName) {
-      const views = ['search', 'manage', 'share'];
+    window.switchTab = function(tabName) {
+      const views = ['search', 'manage'];
       views.forEach(v => {
         const section = document.getElementById(`view-${v}`);
         const btn = document.getElementById(`tab-btn-${v}`);
@@ -510,17 +589,15 @@
 
       if (tabName === 'manage') {
         renderDataList();
-      } else if (tabName === 'share') {
-        renderJSCodeOutput();
       } else if (tabName === 'search') {
         const searchInput = document.getElementById('search-input');
         if (searchInput) searchInput.focus();
       }
-    }
+    };
 
     // --- 1. 検索機能 & 即時フルスクリーン表示 ---
 
-    function handleSearchInput(input) {
+    window.handleSearchInput = function(input) {
       validateSearchInput(input);
       const val = input.value;
 
@@ -532,10 +609,9 @@
           openFullScreenResult(hit);
         }
       }
-    }
+    };
 
     function validateSearchInput(input) {
-      // IME変換確定前の文字列を壊さないよう、全角化済みの値で比較・反映
       const val = normalizeNumber(input.value);
       if (input.value !== val) {
         input.value = val;
@@ -551,7 +627,7 @@
       }
     }
 
-    function clearSearch() {
+    window.clearSearch = function() {
       const input = document.getElementById('search-input');
       input.value = '';
       document.getElementById('clear-search-btn').classList.add('hidden');
@@ -559,9 +635,9 @@
       document.getElementById('search-result-area').classList.add('hidden');
       currentSearchResult = null;
       input.focus();
-    }
+    };
 
-    function executeSearch() {
+    window.executeSearch = function() {
       const input = document.getElementById('search-input');
       const val = normalizeNumber(input.value);
       input.value = val;
@@ -590,7 +666,7 @@
         emptyBox.classList.remove('hidden');
         document.getElementById('empty-code-display').textContent = val;
       }
-    }
+    };
 
     function displaySearchHit(item) {
       currentSearchResult = item;
@@ -614,7 +690,6 @@
     }
 
     function openFullScreenResult(item) {
-      // 既存のタイマーがあればクリア
       if (countdownTimerId) {
         clearInterval(countdownTimerId);
         countdownTimerId = null;
@@ -629,7 +704,6 @@
       codeEl.textContent = item.number;
       textEl.textContent = item.text;
 
-      // 文字の長さに応じたダイナミックフォントサイズ調整
       const len = item.text.length;
       textEl.className = 'whitespace-pre-wrap font-bold leading-relaxed tracking-wide text-white drop-shadow-md select-text ';
       if (len <= 15) {
@@ -642,7 +716,6 @@
         textEl.className += 'text-base sm:text-xl md:text-2xl text-left';
       }
 
-      // プログレスバー＆タイマー初期化（10秒 = 10000ms）
       const totalMs = 10000;
       const startTime = Date.now();
       secEl.textContent = '10';
@@ -665,7 +738,7 @@
       }, 100);
     }
 
-    function closeFullScreenResult() {
+    window.closeFullScreenResult = function() {
       if (countdownTimerId) {
         clearInterval(countdownTimerId);
         countdownTimerId = null;
@@ -674,37 +747,36 @@
       const overlay = document.getElementById('fullscreen-overlay');
       overlay.classList.add('hidden');
 
-      // 次のコード入力に備えて入力欄をクリア＆フォーカス
       const searchInput = document.getElementById('search-input');
       searchInput.value = '';
       document.getElementById('clear-search-btn').classList.add('hidden');
       document.getElementById('search-error').classList.add('hidden');
       searchInput.focus();
-    }
+    };
 
-    function copyResultText() {
+    window.copyResultText = function() {
       if (!currentSearchResult) return;
       copyToClipboard(currentSearchResult.text, '表示テキストをコピーしました');
-    }
+    };
 
-    function prepareQuickRegister() {
+    window.prepareQuickRegister = function() {
       const val = normalizeNumber(document.getElementById('search-input').value);
-      switchTab('manage');
-      cancelEdit();
+      window.switchTab('manage');
+      window.cancelEdit();
       document.getElementById('input-number').value = val;
       document.getElementById('input-text').focus();
-    }
+    };
 
     // --- 2. データ管理機能 ---
 
-    function validateManageNumberInput(input) {
+    window.validateManageNumberInput = function(input) {
       const val = normalizeNumber(input.value);
       if (input.value !== val) {
         input.value = val;
       }
-    }
+    };
 
-    function handleSave(e) {
+    window.handleSave = async function(e) {
       e.preventDefault();
       const idInput = document.getElementById('edit-id').value;
       const numberInput = normalizeNumber(document.getElementById('input-number').value.trim());
@@ -728,46 +800,44 @@
         openConfirmModal(
           '上書き確認',
           `数字コード「${numberInput}」は既に登録されています。内容を上書きしますか？`,
-          () => {
-            duplicate.text = textInput;
-            duplicate.updatedAt = new Date().toISOString();
-            // もし別IDを編集中だった場合は元のレコードを削除
-            if (idInput) {
-              appItems = appItems.filter(item => item.id !== idInput);
+          async () => {
+            const updated = {
+              id: duplicate.id,
+              number: numberInput,
+              text: textInput,
+              updatedAt: new Date().toISOString()
+            };
+            const ok = await saveItemToCloud(updated);
+            if (ok) {
+              if (idInput && idInput !== duplicate.id) {
+                await deleteItemFromCloud(idInput);
+              }
+              window.cancelEdit();
+              showToast('すべてのデバイスへ上書き同期しました');
             }
-            saveDataToStorage();
-            renderDataList();
-            cancelEdit();
-            showToast('データを上書き保存しました');
           }
         );
         return;
       }
 
-      if (idInput) {
-        // 既存編集
-        const target = appItems.find(item => item.id === idInput);
-        if (target) {
-          target.number = numberInput;
-          target.text = textInput;
-          target.updatedAt = new Date().toISOString();
-          showToast('データを更新しました');
-        }
-      } else {
-        // 新規追加
-        appItems.unshift({
-          id: 'item_' + Date.now() + Math.random().toString(36).substr(2, 4),
-          number: numberInput,
-          text: textInput,
-          updatedAt: new Date().toISOString()
-        });
-        showToast('新しいデータを登録しました');
-      }
+      const saveBtn = document.getElementById('save-btn');
+      saveBtn.disabled = true;
 
-      saveDataToStorage();
-      renderDataList();
-      cancelEdit();
-    }
+      const itemToSave = {
+        id: idInput || ('item_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5)),
+        number: numberInput,
+        text: textInput,
+        updatedAt: new Date().toISOString()
+      };
+
+      const ok = await saveItemToCloud(itemToSave);
+      saveBtn.disabled = false;
+
+      if (ok) {
+        window.cancelEdit();
+        showToast(idInput ? '変更をすべてのデバイスへ同期しました' : '登録し、すべてのデバイスへ同期しました');
+      }
+    };
 
     function startEdit(id) {
       const target = appItems.find(item => item.id === id);
@@ -784,7 +854,7 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
-    function cancelEdit() {
+    window.cancelEdit = function() {
       document.getElementById('edit-id').value = '';
       document.getElementById('input-number').value = '';
       document.getElementById('input-text').value = '';
@@ -793,7 +863,7 @@
       document.getElementById('form-title').innerHTML = '<i class="fa-solid fa-plus-circle text-brand-600"></i><span>新規データ登録</span>';
       document.getElementById('save-btn').innerHTML = '<i class="fa-solid fa-floppy-disk mr-1.5"></i><span>登録を保存</span>';
       document.getElementById('cancel-edit-btn').classList.add('hidden');
-    }
+    };
 
     function confirmDelete(id) {
       const target = appItems.find(item => item.id === id);
@@ -801,25 +871,24 @@
 
       openConfirmModal(
         'データの削除',
-        `数字コード「${target.number}」のデータを削除してもよろしいですか？`,
-        () => {
-          appItems = appItems.filter(item => item.id !== id);
-          saveDataToStorage();
-          renderDataList();
-          if (document.getElementById('edit-id').value === id) {
-            cancelEdit();
+        `数字コード「${target.number}」のデータをすべてのデバイスから削除してもよろしいですか？`,
+        async () => {
+          const ok = await deleteItemFromCloud(id);
+          if (ok) {
+            if (document.getElementById('edit-id').value === id) {
+              window.cancelEdit();
+            }
+            showToast('データを削除しました');
           }
-          showToast('データを削除しました');
         }
       );
     }
 
-    function renderDataList() {
+    window.renderDataList = function() {
       const tbody = document.getElementById('data-table-body');
       const emptyMsg = document.getElementById('empty-table-msg');
       const rawFilter = document.getElementById('list-search-input').value;
       const filterText = rawFilter.toLowerCase();
-      // 半角数字で検索された場合でも全角数字のデータにヒットするように正規化文字列も用意
       const normalizedFilterNum = normalizeNumber(rawFilter);
 
       tbody.innerHTML = '';
@@ -841,12 +910,10 @@
         const tr = document.createElement('tr');
         tr.className = 'hover:bg-slate-50/80 transition-colors';
 
-        // 数字コードセル
         const tdNum = document.createElement('td');
         tdNum.className = 'px-4 py-3 font-mono font-bold text-slate-800 whitespace-nowrap align-top';
         tdNum.textContent = item.number;
 
-        // テキストセル
         const tdText = document.createElement('td');
         tdText.className = 'px-4 py-3 text-slate-600 align-top max-w-md';
         const previewDiv = document.createElement('div');
@@ -854,7 +921,6 @@
         previewDiv.textContent = item.text;
         tdText.appendChild(previewDiv);
 
-        // 操作セル
         const tdActions = document.createElement('td');
         tdActions.className = 'px-4 py-3 text-right whitespace-nowrap align-top space-x-1';
 
@@ -880,90 +946,7 @@
         tr.appendChild(tdActions);
         tbody.appendChild(tr);
       });
-    }
-
-    // --- 3. 共有・バックアップ機能 ---
-
-    function exportJSONFile() {
-      try {
-        const jsonStr = JSON.stringify(appItems, null, 2);
-        const blob = new Blob([jsonStr], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `barcode-search-data-${new Date().toISOString().slice(0, 10)}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        showToast('JSONファイルをダウンロードしました');
-      } catch (e) {
-        console.error(e);
-        showToast('エクスポートに失敗しました', 'error');
-      }
-    }
-
-    function copyJSONText() {
-      const jsonStr = JSON.stringify(appItems, null, 2);
-      copyToClipboard(jsonStr, 'JSONデータをクリップボードにコピーしました');
-    }
-
-    function importJSONFile(event) {
-      const file = event.target.files[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          const imported = JSON.parse(e.target.result);
-          if (!Array.isArray(imported)) {
-            throw new Error('配列形式のJSONではありません');
-          }
-
-          let addedCount = 0;
-          imported.forEach(item => {
-            if (item.number && item.text) {
-              const normNum = normalizeNumber(item.number);
-              if (!normNum) return;
-              const idx = appItems.findIndex(i => i.number === normNum);
-              if (idx !== -1) {
-                appItems[idx].text = item.text;
-              } else {
-                appItems.push({
-                  id: item.id || ('item_' + Date.now() + Math.random().toString(36).substr(2, 4)),
-                  number: normNum,
-                  text: item.text,
-                  updatedAt: item.updatedAt || new Date().toISOString()
-                });
-              }
-              addedCount++;
-            }
-          });
-
-          saveDataToStorage();
-          renderDataList();
-          showToast(`${addedCount}件のデータを読み込みました`);
-        } catch (err) {
-          console.error(err);
-          showToast('JSONファイルの読み込みに失敗しました', 'error');
-        } finally {
-          event.target.value = '';
-        }
-      };
-      reader.readAsText(file);
-    }
-
-    function renderJSCodeOutput() {
-      const output = document.getElementById('js-code-output');
-      if (!output) return;
-      const code = `const DEFAULT_DATA = ${JSON.stringify(appItems, null, 2)};`;
-      output.textContent = code;
-    }
-
-    function copyDefaultDataCode() {
-      const code = `const DEFAULT_DATA = ${JSON.stringify(appItems, null, 2)};`;
-      copyToClipboard(code, 'GitHub組込用JSコードをコピーしました');
-    }
+    };
 
     // --- ユーティリティ（モーダル・トースト・クリップボード） ---
 
